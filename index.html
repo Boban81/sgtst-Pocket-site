@@ -414,6 +414,16 @@ table.t td{padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:to
 .tscroll{overflow-x:auto}
 .pres table.t th{font-size:clamp(12px,1.1vw,17px)}
 .pres table.t td{padding:clamp(6px,1.2vh,12px) 8px}
+.fish{display:grid;gap:0;margin:0}
+.fish-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.fish-m{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px 9px;font-size:13px;min-width:0}
+.fish-m b{display:block;background:var(--head);color:var(--head-ink);border-radius:6px;padding:3px 7px;font-size:12px;margin:-2px -3px 6px}
+.fish-m ul{margin:0;padding:0 0 0 14px}.fish-m li{margin:0 0 3px;overflow-wrap:anywhere}
+.fish-m li.root{color:var(--red);font-weight:700}.fish-m .none{color:var(--muted)}
+.fish-spine{display:flex;align-items:center;margin:8px 0}
+.fish-spine i{flex:1;height:4px;background:var(--head);border-radius:2px;position:relative}
+.fish-spine i::after{content:"";position:absolute;right:-2px;top:-6px;border:8px solid transparent;border-left:10px solid var(--head);border-right:0}
+.fish-spine span{background:var(--red);color:#fff;font-weight:800;font-size:12px;padding:8px 10px;border-radius:0 20px 20px 0;margin-left:8px;letter-spacing:.5px}
 </style>
 </head>
 <body>
@@ -1715,7 +1725,7 @@ var QRCode=req('index'),EC=req('QRErrorCorrectLevel');return function(text,level
 <script src="config.js"></script>
 <script>
 "use strict";
-const VERSION = '1.7.1';
+const VERSION = '1.9.0';
 const FIREBASE_VER = '10.12.2';
 
 /* ---------- utilidades ---------- */
@@ -2047,6 +2057,7 @@ VIEWS.exts = (r) => {
     <div class="filters" role="group" aria-label="Filtros">${F.map(([k,l])=>`<button data-f="${k}" aria-pressed="${f===k}">${l}</button>`).join('')}
       ${units.length>1 ? `<button data-u="" aria-pressed="${!u}">Todas as unidades</button>${units.map(x=>`<button data-u="${x.id}" aria-pressed="${u===x.id}">${esc(x.name)}</button>`).join('')}`:''}
     </div>
+    <button class="btn full" id="extpdf" style="margin-bottom:10px;border:2px solid var(--red);color:var(--red);font-weight:700">${ICON.share} Compartilhar planilha PDF${ex.length !== (S.extinguishers||[]).length ? ` (${ex.length} do filtro)` : ''}</button>
     <div class="row" style="margin-bottom:10px"><span class="muted small grow">${ex.length} extintor${ex.length===1?'':'es'}</span><button class="btn" id="labels">Etiquetas</button><button class="btn" id="newext">${ICON.plus} Novo</button></div>
     <div class="list">${ex.map(extCard).join('') || '<div class="empty">Nenhum extintor neste filtro.</div>'}</div>
     ${hist.length ? `<details class="more"><summary>Atividade recente dos extintores</summary><div class="panel"><ul class="timeline">${hist.map(h=>`<li><div class="grow"><div>${esc(h.event)}</div><div class="small muted">${esc(h.notes||'')}${h.responsible?' · '+esc(h.responsible):''}</div></div><span class="small muted">${fmtDate(h.date)}</span></li>`).join('')}</ul></div></details>` : ''}
@@ -2056,6 +2067,11 @@ VIEWS.exts = (r) => {
     document.querySelectorAll('[data-u]').forEach(b => b.onclick = () => { r.u = b.dataset.u; render(); });
     $('#newext').onclick = () => go('extForm', {});
     $('#scan').onclick = () => go('scan');
+    $('#extpdf').onclick = ev => {
+      if(!ex.length) return toast('Nenhum extintor neste filtro.');
+      const fl = [f!=='all' ? (F.find(x => x[0]===f)||[])[1] : '', u ? nameOf('units', u) : '', q ? `busca "${r.q}"` : ''].filter(Boolean).join(' · ');
+      sendExtPDF(ex, fl, ev.currentTarget);
+    };
     $('#labels').onclick = () => { if(!ex.length) return toast('Nenhum extintor neste filtro.'); shareFile(`etiquetas_extintores_${today()}.html`, labelsSheetHTML(ex), 'text/html').then(()=>toast(`Folha com ${ex.length} etiqueta${ex.length===1?'':'s'} gerada. Abra no Chrome e imprima.`)); };
     bindExtCards();
   }};
@@ -2412,16 +2428,47 @@ const OCC_STATUS = ['ANÁLISE PRELIMINAR','EM INVESTIGAÇÃO','CONCLUÍDA'];
 const occStatusChip = s => `<span class="chip ${/CONCLU|ENCERR/i.test(s)?'c-ok':/INVESTIG/i.test(s)?'c-rec':'c-warn'}">${esc(s||'Sem status')}</span>`;
 const BODY = ['Cabeça','Olhos','Face','Pescoço','Ombros','Braços','Cotovelos','Antebraços','Punhos','Mãos','Dedos','Tórax','Abdômen','Costas','Pernas','Joelhos','Pés / tornozelos','Múltiplas partes'];
 const NATURE = ['Ferida corte','Contusão','Escoriação','Entorse','Fratura','Luxação','Queimadura','Corpo estranho','Amputação','Lesão muscular'];
+const PPE_LIST = ['Capacete','Óculos de segurança','Protetor auricular','Mangote de kevlar','Luvas anticorte','Botina de segurança'];
+const CLASS_CODES = {ACA:'Acidente com afastamento', ASA:'Acidente sem afastamento'};
+const codeFull = v => CLASS_CODES[v] ? `${v} (${CLASS_CODES[v]})` : v;
+const ISH = [
+  ['metodo','Método','procedimento, PT, sequência da tarefa',['Procedimento inexistente','Procedimento não seguido','Sem análise de risco / PT','Sequência da tarefa inadequada','Pressa / pressão por produção']],
+  ['maquina','Máquina','equipamento, proteções (NR-12), ferramentas',['Proteção ausente ou removida','Dispositivo de segurança inoperante','Falta de manutenção','Ferramenta inadequada ou danificada','Falha do equipamento']],
+  ['maoobra','Mão de obra','pessoa, comportamento, treinamento',['Falta de treinamento','Não usava EPI','Ato inseguro','Desatenção / distração','Fadiga','Excesso de confiança']],
+  ['material','Material','peças, vidro, produtos manuseados',['Aresta cortante','Material quebrado / trincado','Material pesado ou mal acondicionado','Produto químico','Embalagem inadequada']],
+  ['ambiente','Meio ambiente','piso, iluminação, ruído, calor, organização',['Piso escorregadio / irregular','Iluminação deficiente','Ruído / calor','Desorganização / falta de 5S','Falta de sinalização','Espaço restrito']],
+  ['medida','Medida','inspeções, controles, supervisão',['Inspeção não realizada','Checklist não aplicado','Falha na supervisão','Risco não previsto no PGR','Controle inexistente']],
+];
+const ishOf = a => a.ishikawa || {};
+const ishAny = a => ISH.some(([k]) => (ishOf(a)[k]||[]).length) || !!trim(a.rootCause);
+const LEGACY_WHYS = ['actWhy1','actWhy2','actWhy3','actWhy4','actWhy5'];
 const AD = [
   ['Colaborador', [['registration','Matrícula'],['role','Função'],['origin','Vínculo','sel',['CLT','Terceiro','Temporário','Estagiário','Aprendiz']],['employer','Empregador / área'],['contractingArea','Área contratante'],['age','Idade','num'],['birthDate','Nascimento','date'],['admissionDate','Admissão','date'],['companyYears','Anos na empresa','num'],['companyMonths','Meses na empresa','num'],['roleYears','Anos na função','num'],['roleMonths','Meses na função','num'],['contactPhone','Telefone de contato']]],
-  ['Circunstâncias', [['occurrenceNumber','Nº da ocorrência (automático)'],['shift','Turno','sel',['Manhã','Tarde','Noite','Administrativo']],['weekDay','Dia da semana','sel',WEEKDAYS],['hoursWorked','Tempo trabalhado até o evento'],['areaIdentification','Área'],['reportedBy','Comunicado por'],['shiftSupervisor','Supervisor do turno'],['supervisorPresent','Supervisor presente?','yn'],['workingAlone','Trabalhava sozinho?','yn'],['overtime','Fazia hora extra?','yn'],['overdueVacation','Férias vencidas?','yn'],['repeatAccident','Já se acidentou antes?','yn']]],
-  ['Condições de trabalho', [['worePpe','Usava EPI?','yn'],['adequatePpe','EPI adequado à tarefa?','yn'],['jobTraining','Treinado para a função?','yn'],['preventiveTraining','Recebeu treinamento preventivo?','yn'],['taskInstructions','Tinha instruções da tarefa?','yn'],['toolsCondition','Ferramentas em boas condições?','yn'],['riskAnalysis','Havia análise de risco da tarefa?','yn'],['equipmentDamage','Houve dano a equipamento?','yn']]],
-  ['Lesão e afastamento', [['bodyParts','Partes do corpo atingidas','tags',BODY],['bodySide','Lado do corpo','sel',['Direito','Esquerdo','Ambos','Não se aplica']],['injuryNature','Natureza da lesão','tags',NATURE],['injuryAgent','Agente causador'],['classification','Classificação','tags',['Incapacitante','Não incapacitante','Fatal']],['classCode','Código de classificação','tags',['ACA','ASA']],['incapacity','Incapacidade','sel',['Sem incapacidade','Até 2 dias','3 a 15 dias','Mais de 15 dias','Permanente']],['absenceDays','Dias de afastamento','num'],['lostDays','Dias perdidos','num'],['treatmentDays','Dias de tratamento','num'],['potential','Potencial de gravidade','sel',['Baixa','Média','Alta']]]],
+  ['Circunstâncias', [['occurrenceNumber','Nº da ocorrência (automático)'],['shift','Turno','sel',['Manhã','Tarde','Noite','Administrativo']],['weekDay','Dia da semana','sel',WEEKDAYS],['hoursWorked','Horas trabalhadas'],['areaIdentification','Área'],['reportedBy','Comunicado por'],['shiftSupervisor','Supervisor do turno'],['supervisorPresent','Supervisor presente?','yn'],['workingAlone','Trabalhava sozinho?','yn'],['overtime','Fazia hora extra?','yn'],['overdueVacation','Férias vencidas?','yn'],['repeatAccident','Já se acidentou antes?','yn']]],
+  ['Condições de trabalho', [['worePpe','Usava EPI?','yn'],['ppeUsed','EPIs que estava usando (deixe sem marcar os que não usava)','ppe'],['adequatePpe','EPI adequado à tarefa?','yn'],['preventiveTraining','Recebeu treinamento preventivo?','yn'],['taskInstructions','Tinha instruções da tarefa?','yn'],['toolsCondition','Ferramentas em boas condições?','yn'],['riskAnalysis','Havia análise de risco da tarefa?','yn'],['equipmentDamage','Houve dano a equipamento?','yn'],['damagedEquipment','Qual equipamento foi danificado?']]],
+  ['Lesão e afastamento', [['bodyParts','Partes do corpo atingidas','tags',BODY],['bodySide','Lado do corpo','sel',['Direito','Esquerdo','Ambos','Não se aplica']],['injuryNature','Natureza da lesão','tags',NATURE],['injuryAgent','Agente causador'],['classCode','Código de classificação','tags',Object.keys(CLASS_CODES).map(codeFull)],['absenceDays','Dias de afastamento','num'],['treatmentDays','Dias de tratamento','num'],['potential','Potencial de gravidade','sel',['Baixa','Média','Alta']]]],
   ['Atendimento médico', [['medicalPlaceType','Local do atendimento','sel',['UPA','Hospital','Pronto-socorro','UBS / Posto de saúde','Clínica','Ambulatório da empresa','Outro']],['medicalPlaceName','Nome do local'],['doctorName','Médico(a)'],['doctorCrm','CRM'],['medicalDate','Data do atendimento','date'],['medicalOpinion','Parecer médico','area']]],
   ['Entrevista e campo', [['interviewFacts','Relato da entrevista','area'],['interviewConditions','Condições relatadas','area'],['interviewFactors','Fatores identificados na entrevista','tags',['Ato inseguro','Condição insegura','Imperícia','Negligência','Imprudência','Fator pessoal']],['fieldFactors','Fatores observados em campo','tags',['Padrões de trabalho incompletos','Condições de alto risco','Falta de manutenção','Layout inadequado','Falta de sinalização','Falta de proteção']],['witness1Name','Testemunha'],['witness1Role','Função da testemunha'],['witness1Company','Empresa da testemunha']]],
-  ['Análise dos 5 porquês', [['actWhy1','1º Por quê?','area'],['actWhy2','2º Por quê?','area'],['actWhy3','3º Por quê?','area'],['actWhy4','4º Por quê?','area'],['actWhy5','5º Por quê?','area'],['conditionWhy1','Por que a condição existia?','area']]],
   ['Ações corretivas', [['correctiveActions','Ações corretivas','area'],['investigator2Date','Data da revisão da investigação','date']]],
 ];
+function adRows(a, fs, skip=[]){
+  const out = [];
+  fs.forEach(([k,l,tp]) => {
+    if(skip.includes(k)) return;
+    const v = a[k];
+    if(k === 'ppeUsed'){
+      const used = [].concat(v||[]);
+      if(!used.length && !a.worePpe) return;
+      out.push(['EPIs em uso', used.length ? used.join(', ') : 'Nenhum']);
+      const no = PPE_LIST.filter(p => !used.includes(p)); if(no.length) out.push(['EPIs sem uso', no.join(', ')]);
+      return;
+    }
+    if(Array.isArray(v) ? !v.length : !trim(v)) return;
+    const txt = k==='classCode' ? [].concat(v).map(codeFull).join(', ') : tp==='date' ? fmtDate(v) : Array.isArray(v) ? v.join(', ') : v;
+    out.push([l.replace(' (automático)',''), txt]);
+  });
+  return out;
+}
 const AD_LABEL = Object.fromEntries(AD.flatMap(([,fs]) => fs.map(([k,l]) => [k,l])));
 
 /* ---------- numeração automática: 001/2026 ---------- */
@@ -2494,8 +2541,8 @@ function occSummaryText(o){
   if(o.hadInjury) L.push('', `*Lesão:* ${o.hadInjury}${o.injuryDescription?' · '+o.injuryDescription:''}`);
   if(o.medicalCare==='SIM' || a.medicalPlaceType || a.medicalPlaceName) L.push(`*Atendimento médico:* ${[a.medicalPlaceType, a.medicalPlaceName].filter(Boolean).join(' · ') || 'sim'}${o.medicalCareDetails?' · '+o.medicalCareDetails:''}`);
   if(a.absenceDays) L.push(`*Dias de afastamento:* ${a.absenceDays}`);
-  const whys = ['actWhy1','actWhy2','actWhy3','actWhy4','actWhy5'].map(k=>a[k]).filter(Boolean);
-  if(whys.length){ L.push('', '*5 porquês:*'); whys.forEach((w,i)=>L.push(`${i+1}. ${w}`)); }
+  if(ishAny(a)){ L.push('', '*Espinha de peixe (Ishikawa):*'); ISH.forEach(([k,l]) => { const c = ishOf(a)[k]||[]; if(c.length) L.push(`• ${l}: ${c.join('; ')}`); }); if(a.rootCause) L.push(`*Causa raiz:* ${a.rootCause}`); }
+  else { const whys = LEGACY_WHYS.map(k=>a[k]).filter(Boolean); if(whys.length){ L.push('', '*5 porquês:*'); whys.forEach((w,i)=>L.push(`${i+1}. ${w}`)); } }
   if(a.correctiveActions) L.push('', '*Ações corretivas:*', a.correctiveActions);
   L.push('', '_Relatório completo em PDF anexo._');
   return L.join('\n');
@@ -2580,6 +2627,33 @@ async function occPDF(o){
     y -= 4;
   };
 
+  // ----- espinha de peixe (Ishikawa) -----
+  function drawFish(){
+    if(!ishAny(a)) return;
+    section('Espinha de peixe (Ishikawa)');
+    const ish = ishOf(a), headW = 92, sx1 = M + CW - headW, colW = (sx1 - M)/3, LH = 9.5, MAXL = 12;
+    const linesOf = ([k,l]) => { const out = []; (ish[k]||[]).forEach(c => { const isRoot = a.rootCause === `${l}: ${c}`; wrap('• '+c, isRoot?FB:F, 7.5, colW-24).forEach((t,i) => out.push({t: i ? '  '+t : t, r:isRoot})); }); if(out.length > MAXL){ out.length = MAXL; out[MAXL-1] = {t:'…', r:false}; } return out.length ? out : [{t:'—', r:false, m:true}]; };
+    const L = ISH.map(linesOf);
+    const hTop = Math.max(...L.slice(0,3).map(x => x.length)) * LH + 34, hBot = Math.max(...L.slice(3).map(x => x.length)) * LH + 34;
+    need(hTop + hBot + 16);
+    const top = y, spY = top - hTop, bot = spY - hBot;
+    pg.drawLine({start:{x:M, y:spY}, end:{x:sx1, y:spY}, thickness:2.5, color:DARK});
+    pg.drawRectangle({x:sx1, y:spY-20, width:headW, height:40, color:YEL});
+    const ht = 'ACIDENTE'; pg.drawText(ht, {x:sx1 + (headW - FB.widthOfTextAtSize(ht, 11))/2, y:spY+1, size:11, font:FB, color:rgb(1,1,1)});
+    const nt = pdfSafe(occNum(o) ? 'Nº '+occNum(o) : ''); if(nt) pg.drawText(nt, {x:sx1 + (headW - F.widthOfTextAtSize(nt, 8))/2, y:spY-12, size:8, font:F, color:rgb(1,1,1)});
+    ISH.forEach(([k,l], i) => {
+      const upper = i < 3, cx = M + (i%3)*colW, lab = pdfSafe(l.toUpperCase());
+      const by = upper ? top - 16 : bot;                  // caixa do M
+      pg.drawRectangle({x:cx+4, y:by, width:colW-14, height:15, color:DARK});
+      pg.drawText(lab, {x:cx+9, y:by+4.5, size:8, font:FB, color:rgb(1,1,1)});
+      pg.drawLine({start:{x:cx+colW-10, y: upper ? by : by+15}, end:{x:cx+colW-1, y:spY}, thickness:1.4, color:DARK});
+      let ly = upper ? by - 10 : spY - 12;
+      L[i].forEach(z => { pg.drawText(z.t, {x:cx+8, y:ly, size:7.5, font: z.r ? FB : F, color: z.r ? YEL : z.m ? MUT : INK}); ly -= LH; });
+    });
+    y = bot - 8;
+    if(a.rootCause) row('Causa raiz', a.rootCause);
+  }
+
   // ----- cabeçalho -----
   newPage();
   pg.drawRectangle({x:0, y:H-96, width:W, height:90, color:DARK});
@@ -2611,20 +2685,15 @@ async function occPDF(o){
   row('Atendimento médico', [o.medicalCare, o.medicalCareDetails].filter(Boolean).join(' · '));
 
   AD.forEach(([t, fs]) => {
-    const vals = fs.filter(([k]) => { if(k==='occurrenceNumber' || k==='weekDay') return false; const v = a[k]; return Array.isArray(v) ? v.length : trim(v); });
-    if(!vals.length) return;
+    if(t === 'Ações corretivas') drawFish();
+    const rows = adRows(a, fs, ['occurrenceNumber','weekDay']);
+    if(!rows.length) return;
     section(t);
-    if(t === 'Análise dos 5 porquês'){
-      vals.forEach(([k,l]) => row(l, a[k]));
-      return;
-    }
-    vals.forEach(([k,l,tp]) => row(l.replace(' (automático)',''), tp==='date' ? fmtDate(a[k]) : a[k]));
+    rows.forEach(([l,v]) => row(l, v));
   });
+  { const whys = LEGACY_WHYS.map(k => a[k]).filter(Boolean);
+    if(whys.length){ section('Análise dos 5 porquês (registro anterior)'); whys.forEach((w,i) => row(`${i+1}º Por quê?`, w)); if(a.conditionWhy1) row('Por que a condição existia?', a.conditionWhy1); } }
 
-  { const k = occCost(o); if(k.total || k.days){ section('Custos');
-    COST_FIELDS.forEach(([f,l]) => { if(Number(o.costs?.[f])) row(l, fmtR(o.costs[f])); });
-    if(k.days) row('Dias perdidos', `${k.days} x ${fmtR(dayCostOf(o))} = ${fmtR(k.daysCost)}`);
-    row('Custo total', fmtR(k.total)); } }
   // ----- fotos -----
   const fotos = (o.media||[]).filter(m => /^data:image\/(jpe?g|png)/i.test(m.url||''));
   if(fotos.length){
@@ -2667,6 +2736,151 @@ function occFileName(o){
   const pes = trim(o.personInvolved).split(/\s+/)[0] || '';
   return `Ocorrencia_${n}${pes?'_'+pes:''}.pdf`.normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^\w.\-]/g,'_');
 }
+/* ---------- compartilhar um PDF (base64) ---------- */
+async function sharePdfB64(b64, name, title, text){
+  const C = window.Capacitor;
+  if(C && C.isNativePlatform && C.isNativePlatform() && C.Plugins && C.Plugins.Filesystem && C.Plugins.Share){
+    const w = await C.Plugins.Filesystem.writeFile({path:name, directory:'CACHE', data:b64});
+    await C.Plugins.Share.share({title, text, files:[w.uri], dialogTitle:'Enviar PDF'});
+    return;
+  }
+  const blob = new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {type:'application/pdf'});
+  const file = typeof File==='function' ? new File([blob], name, {type:'application/pdf'}) : null;
+  if(file && navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({title, text, files:[file]}); }
+  else{ const u = document.createElement('a'); u.href = URL.createObjectURL(blob); u.download = name; document.body.appendChild(u); u.click(); setTimeout(()=>{ URL.revokeObjectURL(u.href); u.remove(); }, 1500); toast('PDF baixado'); }
+}
+
+/* ---------- planilha de extintores em PDF ---------- */
+async function extPDF(list, filtro){
+  const {PDFDocument, StandardFonts, rgb} = await getPDFLib();
+  const doc = await PDFDocument.create();
+  doc.setTitle('Planilha de extintores'); doc.setCreator('SGTST Pocket '+VERSION); doc.setProducer('SGTST Pocket');
+  const F = await doc.embedFont(StandardFonts.Helvetica), FB = await doc.embedFont(StandardFonts.HelveticaBold);
+  const owl = await pdfOwl(doc);
+  const W = 841.89, H = 595.28, M = 30, CW = W - 2*M;
+  const WHITE = rgb(1,1,1), INK = rgb(.1,.11,.12), MUT = rgb(.38,.4,.43), LINE = rgb(.85,.86,.9), ZEB = rgb(.955,.957,.98);
+  const RED = rgb(1,.165,.047), PUR = rgb(.008,.031,.36), PUR2 = rgb(.16,.18,.5), PALE = rgb(1,.84,.82);
+  const ST = {ok:[rgb(0,.52,.25), rgb(.85,.94,.89)], warn:[rgb(.6,.42,0), rgb(1,.94,.72)], venc:[rgb(.78,.06,.18), rgb(.98,.88,.89)], rec:[rgb(.04,.36,.68), rgb(.86,.91,.97)]};
+  const company = S.company?.tradeName || S.company?.name || '';
+  const fit = (t, font, size, w) => { t = pdfSafe(t); if(font.widthOfTextAtSize(t, size) <= w) return t; while(t.length > 1 && font.widthOfTextAtSize(t+'…', size) > w) t = t.slice(0,-1); return t+'…'; };
+  const wrap2 = (t, font, size, w) => { const words = pdfSafe(t).split(/ +/), out = []; let line = ''; words.forEach(x => { const tt = line ? line+' '+x : x; if(font.widthOfTextAtSize(tt, size) <= w || !line) line = tt; else { out.push(line); line = x; } }); if(line) out.push(line); if(out.length > 2){ out.length = 2; out[1] = fit(out[1]+' …', font, size, w); } return out.map(l => fit(l, font, size, w)); };
+
+  const COLS = [['Nº',36,'c'],['Tipo',62],['Capac.',44,'c'],['Classe',42,'c'],['Localização',214],['Últ. recarga',62,'c'],['Próx. recarga',64,'c'],['Próx. hidrost.',72,'c'],['Última inspeção',78,'c'],['Situação',CW-674]];
+  const cnt = k => list.filter(e => extStatus(e).k===k).length;
+  const insp = list.filter(e => inspectedThisMonth(e.id)).length;
+  const mes = new Date().toLocaleDateString('pt-BR',{month:'long', year:'numeric'});
+  let pg, y;
+
+  const header = first => {
+    pg = doc.addPage([W,H]);
+    pg.drawRectangle({x:0, y:H-6, width:W, height:6, color:RED});
+    if(first){
+      pg.drawRectangle({x:0, y:H-96, width:W, height:90, color:PUR});
+      pg.drawRectangle({x:0, y:H-100, width:W, height:4, color:RED});
+      const ox = pdfOwlHeader(pg, owl, H, M, rgb);
+      pg.drawText(pdfSafe(company || 'SGTST Pocket'), {x:M+ox, y:H-32, size:10, font:F, color:PALE});
+      pg.drawText('PLANILHA DE EXTINTORES', {x:M+ox, y:H-58, size:22, font:FB, color:WHITE});
+      pg.drawText(pdfSafe(`Situação em ${fmtDate(today())}${filtro ? '  ·  Filtro: '+filtro : ''}`), {x:M+ox, y:H-80, size:10, font:F, color:rgb(.85,.86,.92)});
+      // selo do total
+      const tt = String(list.length), tw = FB.widthOfTextAtSize(tt, 26), bw = Math.max(tw+30, 92);
+      pg.drawRectangle({x:W-M-bw, y:H-84, width:bw, height:58, color:RED});
+      pg.drawText(tt, {x:W-M-bw+(bw-tw)/2, y:H-60, size:26, font:FB, color:WHITE});
+      const lb = list.length===1 ? 'extintor' : 'extintores', lw = F.widthOfTextAtSize(lb, 9);
+      pg.drawText(lb, {x:W-M-bw+(bw-lw)/2, y:H-76, size:9, font:F, color:WHITE});
+      y = H - 116;
+      // cartões de resumo
+      const cards = [['Em dia', cnt('ok'), ST.ok], ['A vencer', cnt('warn'), ST.warn], ['Vencidos', cnt('venc'), ST.venc], ['Em recarga', cnt('rec'), ST.rec], [`Inspecionados no mês (${mes.split(' ')[0]})`, `${insp}/${list.length}`, [PUR, rgb(.9,.91,.97)]]];
+      const gap = 8, cw = (CW - gap*(cards.length-1))/cards.length;
+      cards.forEach(([l,v,[c,bg]], i) => {
+        const x = M + i*(cw+gap);
+        pg.drawRectangle({x, y:y-44, width:cw, height:44, color:bg});
+        pg.drawRectangle({x, y:y-44, width:5, height:44, color:c});
+        pg.drawText(pdfSafe(String(v)), {x:x+14, y:y-25, size:18, font:FB, color:c});
+        pg.drawText(fit(l, F, 8.5, cw-20), {x:x+14, y:y-38, size:8.5, font:F, color:INK});
+      });
+      // barra de inspeções
+      y -= 54;
+      const pct = list.length ? insp/list.length : 0;
+      pg.drawRectangle({x:M, y:y-6, width:CW, height:6, color:LINE});
+      if(pct) pg.drawRectangle({x:M, y:y-6, width:CW*pct, height:6, color:RED});
+      y -= 16;
+    } else {
+      pg.drawText(pdfSafe(`Planilha de extintores${company?' · '+company:''} · ${fmtDate(today())}`), {x:M, y:H-24, size:8.5, font:F, color:MUT});
+      y = H - 34;
+    }
+    // cabeçalho da tabela
+    pg.drawRectangle({x:M, y:y-20, width:CW, height:20, color:PUR});
+    let x = M;
+    COLS.forEach(([l,w,al]) => { const t = fit(l, FB, 7.8, w-8); const tx = al==='c' ? x + (w - FB.widthOfTextAtSize(t, 7.8))/2 : x+5; pg.drawText(t, {x:tx, y:y-13.5, size:7.8, font:FB, color:WHITE}); x += w; });
+    pg.drawRectangle({x:M, y:y-22, width:CW, height:2, color:RED});
+    y -= 22;
+  };
+
+  header(true);
+  list.forEach((e, idx) => {
+    const st = extStatus(e), li = lastInspection(e.id);
+    const loc = wrap2(placePath(e), F, 8, COLS[4][1]-10);
+    const h = loc.length > 1 ? 26 : 18;
+    if(y - h < M + 40) header(false);
+    if(idx % 2) pg.drawRectangle({x:M, y:y-h, width:CW, height:h, color:ZEB});
+    const cells = [e.asset||'?', e.type||'—', e.capacity||'—', e.fireClass||'—', null, fmtDate(e.lastRecharge)||'—', fmtDate(e.nextRecharge)||'—', fmtDate(e.nextHydro)||'—', null, null];
+    let x = M; const mid = y - h/2 - 3;
+    COLS.forEach(([l,w,al], c) => {
+      if(c === 4){ loc.forEach((t,i) => pg.drawText(t, {x:x+5, y: loc.length>1 ? y-10-i*10 : mid, size:8, font:F, color:INK})); }
+      else if(c === 8){
+        if(li){ const ok = li.overall !== 'NC', t = pdfSafe(fmtDate(li.date)), tag = ok ? 'OK' : 'NC';
+          const tw = F.widthOfTextAtSize(t, 8), gw = FB.widthOfTextAtSize(tag, 7)+8, tot = tw + 4 + gw, x0 = x + (w - tot)/2;
+          pg.drawText(t, {x:x0, y:mid, size:8, font:F, color:INK});
+          pg.drawRectangle({x:x0+tw+4, y:mid-3, width:gw, height:11, color: ok ? ST.ok[0] : ST.venc[0]});
+          pg.drawText(tag, {x:x0+tw+8, y:mid, size:7, font:FB, color:WHITE});
+        } else { const t = 'Nunca'; pg.drawText(t, {x:x+(w-F.widthOfTextAtSize(t,8))/2, y:mid, size:8, font:F, color:MUT}); }
+      }
+      else if(c === 9){
+        const [fc, bg] = ST[st.k] || ST.warn, t = fit(st.label, FB, 7.5, w-18), tw = FB.widthOfTextAtSize(t, 7.5);
+        pg.drawRectangle({x:x+5, y:mid-4, width:tw+12, height:13, color:bg});
+        pg.drawRectangle({x:x+5, y:mid-4, width:3, height:13, color:fc});
+        pg.drawText(t, {x:x+11, y:mid, size:7.5, font:FB, color:fc});
+      }
+      else {
+        const bold = c===0, fnt = bold ? FB : F, sz = bold ? 9 : 8, t = fit(cells[c], fnt, sz, w-8);
+        const venc = (c===6 && daysUntil(e.nextRecharge) !== null && daysUntil(e.nextRecharge) < 0) || (c===7 && daysUntil(e.nextHydro) !== null && daysUntil(e.nextHydro) < 0);
+        const tx = al==='c' ? x + (w - fnt.widthOfTextAtSize(t, sz))/2 : x+5;
+        pg.drawText(t, {x:tx, y:mid, size:sz, font: venc ? FB : fnt, color: venc ? ST.venc[0] : bold ? PUR : INK});
+      }
+      x += w;
+    });
+    y -= h;
+    pg.drawLine({start:{x:M, y}, end:{x:M+CW, y}, thickness:.5, color:LINE});
+  });
+
+  // assinatura
+  if(y - 70 < M + 20) header(false);
+  y -= 50;
+  [['Responsável pelas inspeções', M], ['Técnico de segurança', M + CW/2 + 20]].forEach(([l,x]) => {
+    pg.drawLine({start:{x, y}, end:{x:x+CW/2-40, y}, thickness:.8, color:INK});
+    pg.drawText(l, {x, y:y-12, size:8.5, font:F, color:MUT});
+  });
+  // rodapé
+  const pages = doc.getPages(), when = new Date().toLocaleString('pt-BR');
+  pages.forEach((p, i) => {
+    p.drawLine({start:{x:M, y:M-4}, end:{x:W-M, y:M-4}, thickness:.5, color:LINE});
+    p.drawText(pdfSafe(`Gerado pelo SGTST Pocket ${VERSION} em ${when}`), {x:M, y:M-16, size:7.5, font:F, color:MUT});
+    const pt = `Página ${i+1} de ${pages.length}`; p.drawText(pdfSafe(pt), {x:W-M-F.widthOfTextAtSize(pdfSafe(pt), 7.5), y:M-16, size:7.5, font:F, color:MUT});
+  });
+  return await doc.saveAsBase64();
+}
+async function sendExtPDF(list, filtro, btn){
+  const old = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Gerando PDF…'; }
+  try{
+    const b64 = await extPDF(list, filtro);
+    const venc = list.filter(e => extStatus(e).k==='venc').length, warn = list.filter(e => extStatus(e).k==='warn').length;
+    const text = `*Planilha de extintores${S.company?.tradeName ? ' · '+S.company.tradeName : ''}*\n${fmtDate(today())}${filtro ? ' · '+filtro : ''}\n${list.length} extintores · ${venc} vencido${venc===1?'':'s'} · ${warn} a vencer`;
+    await sharePdfB64(b64, `planilha_extintores_${today()}.pdf`, 'Planilha de extintores', text);
+    logHist('Relatório', `Planilha de extintores em PDF (${list.length})`);
+  }catch(e){ if(!/cancel|abort/i.test(e.message||e.name||'')) toast('Não foi possível gerar o PDF: '+(e.message||e)); }
+  finally{ if(btn){ btn.disabled = false; btn.innerHTML = old; } }
+}
 async function sendOccPDF(o, btn){
   const old = btn ? btn.innerHTML : '';
   if(btn){ btn.disabled = true; btn.textContent = 'Gerando PDF…'; }
@@ -2686,15 +2900,22 @@ async function sendOccPDF(o, btn){
   }catch(e){ if(!/cancel|abort/i.test(e.message||e.name||'')) toast('Não foi possível gerar o PDF: '+(e.message||e)); }
   finally{ if(btn){ btn.disabled = false; btn.innerHTML = old; } }
 }
+function ishView(a){
+  if(!ishAny(a)) return '';
+  const ish = ishOf(a);
+  const box = ([k,l]) => { const c = ish[k]||[]; return `<div class="fish-m"><b>${esc(l)}</b>${c.length ? `<ul>${c.map(x => `<li class="${a.rootCause===`${l}: ${x}`?'root':''}">${esc(x)}</li>`).join('')}</ul>` : '<span class="none">—</span>'}</div>`; };
+  return `<h2>Espinha de peixe (Ishikawa)</h2>
+    <div class="fish"><div class="fish-row">${ISH.slice(0,3).map(box).join('')}</div><div class="fish-spine"><i></i><span>ACIDENTE</span></div><div class="fish-row">${ISH.slice(3).map(box).join('')}</div></div>
+    ${a.rootCause ? `<div class="panel" style="border-left:7px solid var(--red);margin-top:10px"><b>Causa raiz:</b> ${esc(a.rootCause)}</div>` : ''}`;
+}
 VIEWS.occ = (r) => {
   const o = byId('occurrences', r.id);
   if(!o) return {title:'Ocorrência', html:'<div class="empty">Ocorrência não encontrada.</div>'};
   const a = o.accidentDetails || {};
-  const whys = ['actWhy1','actWhy2','actWhy3','actWhy4','actWhy5'].map(k=>a[k]).filter(Boolean);
-  const showVal = v => Array.isArray(v) ? v.join(', ') : v;
-  const secs = AD.filter(([t]) => t!=='Análise dos 5 porquês').map(([t,fs]) => {
-    const rows = fs.filter(([k]) => { const v=a[k]; return Array.isArray(v) ? v.length : trim(v); }).map(([k,l,tp]) => `<dt>${esc(l)}</dt><dd>${esc(tp==='date'?fmtDate(a[k]):showVal(a[k]))}</dd>`).join('');
-    return rows ? `<h2>${esc(t)}</h2><div class="panel"><dl class="dl">${rows}</dl></div>` : '';
+  const whys = LEGACY_WHYS.map(k=>a[k]).filter(Boolean);
+  const secs = AD.map(([t,fs]) => {
+    const rows = adRows(a, fs).map(([l,v]) => `<dt>${esc(l)}</dt><dd>${esc(v)}</dd>`).join('');
+    return (t==='Ações corretivas' ? ishView(a) : '') + (rows ? `<h2>${esc(t)}</h2><div class="panel"><dl class="dl">${rows}</dl></div>` : '');
   }).join('');
   const just = r.justSaved;
   return { title: occNum(o) ? 'Nº '+occNum(o) : occLabel(o), html:`
@@ -2721,8 +2942,7 @@ VIEWS.occ = (r) => {
       ${o.equipmentInvolved?`<dt>Equipamento</dt><dd>${esc(o.equipmentInvolved)}</dd>`:''}
       ${o.witnesses?`<dt>Testemunhas</dt><dd>${esc(o.witnesses)}</dd>`:''}
     </dl></div>
-    ${occCostPanel(o)}
-    ${whys.length ? `<h2>Análise dos 5 porquês</h2><div class="panel"><ol class="why">${whys.map(w=>`<li>${esc(w)}</li>`).join('')}</ol>${a.conditionWhy1?`<p class="small"><b>Condição:</b> ${esc(a.conditionWhy1)}</p>`:''}</div>` : ''}
+    ${whys.length ? `<h2>Análise dos 5 porquês (registro anterior)</h2><div class="panel"><ol class="why">${whys.map(w=>`<li>${esc(w)}</li>`).join('')}</ol>${a.conditionWhy1?`<p class="small"><b>Condição:</b> ${esc(a.conditionWhy1)}</p>`:''}</div>` : ''}
     ${secs}
     <div style="margin-top:22px"><button class="btn danger full" id="del">Excluir ocorrência</button></div>
   `, after(){
@@ -2753,6 +2973,9 @@ VIEWS.occForm = (r) => {
   const people = (S.collaborators||[]).filter(c=>c.active!==false).map(c=>`<option value="${esc(c.name)}">`).join('');
   const adField = ([k,l,tp,opts]) => {
     const n = 'ad.'+k, v = a[k] ?? '';
+    if(k==='classCode') return fld(l, tagsHTML(n, [].concat(a[k]||[]).map(codeFull), opts));
+    if(k==='damagedEquipment') return `<div id="dmgeq" class="${a.equipmentDamage==='SIM' || trim(v) ? '' : 'hidden'}">${fld(l, inp(n, v, 'text', 'placeholder="Ex.: mesa de corte, ponte rolante"'))}</div>`;
+    if(tp==='ppe') return fld(l, tagsHTML(n, a[k], PPE_LIST));
     if(tp==='tags') return fld(l, tagsHTML(n, a[k], opts));
     if(tp==='sel') return fld(l, sel(n, v, opts));
     if(tp==='yn') return fld(l, sel(n, v, YN));
@@ -2762,6 +2985,15 @@ VIEWS.occForm = (r) => {
     return fld(l, inp(n, v));
   };
   const filled = fs => fs.some(([k]) => { const v=a[k]; return Array.isArray(v)?v.length:trim(v); });
+  const ish = ishOf(a);
+  const rootOpts = () => ISH.flatMap(([k,l]) => (ish[k]||[]).map(c => `${l}: ${c}`));
+  const oldWhys = LEGACY_WHYS.map(k=>a[k]).filter(Boolean);
+  const ishForm = `<details class="sec" ${ishAny(a)?'open':''}><summary>Espinha de peixe (Ishikawa)</summary><div class="in" id="ishbox">
+    <p class="small muted" style="margin:0 0 10px">Para cada M, marque o que contribuiu para o acidente (ou adicione outra causa). No fim, escolha a <b>causa raiz</b>: a principal, que se for eliminada evita que o acidente se repita.</p>
+    ${ISH.map(([k,l,h,sug]) => fld(`${l} · ${h}`, tagsHTML('ish.'+k, ish[k]||[], sug))).join('')}
+    <div class="field" style="border-top:2px solid var(--red);padding-top:10px"><label class="lbl" for="ishroot">Causa raiz</label>${sel('ish.root', a.rootCause||'', rootOpts()).replace('<select','<select id="ishroot"')}</div>
+    ${oldWhys.length ? `<p class="small muted" style="margin:10px 0 0">Esta ocorrência tem os 5 porquês do registro anterior. Eles continuam guardados e aparecem na tela e no PDF.</p>` : ''}
+  </div></details>`;
   return { title: isNew ? 'Registrar ocorrência' : 'Editar ocorrência', html:`
   <p class="small muted" style="margin:0 0 10px">${isNew ? `Esta ocorrência vai receber o <b>Nº ${esc(nextOccNumber(occYear(o)))}</b> ao salvar.` : (occNum(o) ? `Ocorrência <b>Nº ${esc(occNum(o))}</b>` : '')}</p>
   <form id="f" autocomplete="off">
@@ -2784,7 +3016,6 @@ VIEWS.occForm = (r) => {
       ${fld('Detalhes dos primeiros socorros', inp('firstAidDetails', o.firstAidDetails))}
       ${fld('Detalhes do atendimento médico', inp('medicalCareDetails', o.medicalCareDetails))}
     </fieldset>
-    ${occCostFieldset(o)}
     <fieldset><legend>Fotos</legend>
       <div id="media">${mediaHTML(o.media, true)}</div>
       <label class="btn full" style="margin-top:8px">${ICON.plus} Adicionar fotos<input type="file" accept="image/*" multiple id="addphoto" class="hidden"></label>
@@ -2792,7 +3023,7 @@ VIEWS.occForm = (r) => {
     </fieldset>
     <h2>Investigação</h2>
     <p class="small muted" style="margin-top:-4px">Preencha o que souber agora. Dá para completar depois.</p>
-    ${AD.map(([t,fs]) => `<details class="sec" ${filled(fs)?'open':''}><summary>${esc(t)}</summary><div class="in">${fs.map(adField).join('')}</div></details>`).join('')}
+    ${AD.map(([t,fs]) => (t==='Ações corretivas' ? ishForm : '') + `<details class="sec" ${filled(fs)?'open':''}><summary>${esc(t)}</summary><div class="in">${fs.map(adField).join('')}</div></details>`).join('')}
     <div class="sticky-save"><button class="btn primary full" type="submit">${isNew?'Registrar ocorrência':'Salvar alterações'}</button></div>
   </form>`, after(){
     const f = $('#f');
@@ -2800,9 +3031,20 @@ VIEWS.occForm = (r) => {
     const collect = () => {
       const fd = new FormData(f);
       ['eventType','status','eventDate','eventTime','unitId','workSectorId','exactLocation','personInvolved','description','equipmentInvolved','fleetVehicleId','witnesses','hadInjury','injuryDescription','firstAid','firstAidDetails','medicalCare','medicalCareDetails'].forEach(k => { if(f.elements[k]) o[k] = fd.get(k) ?? ''; });
-      AD.forEach(([,fs]) => fs.forEach(([k,,tp]) => { a[k] = tp==='tags' ? fd.getAll('ad.'+k) : (fd.get('ad.'+k) ?? ''); }));
-      o.costs = Object.fromEntries([...COST_FIELDS.map(([k]) => k), 'dayCost'].map(k => [k, parseFloat(fd.get('cost.'+k))||'']));
+      AD.forEach(([,fs]) => fs.forEach(([k,,tp]) => { a[k] = (tp==='tags' || tp==='ppe') ? fd.getAll('ad.'+k) : (fd.get('ad.'+k) ?? ''); }));
+      a.ishikawa = Object.fromEntries(ISH.map(([k]) => [k, fd.getAll('ish.'+k)]));
+      a.rootCause = fd.get('ish.root') ?? '';
     };
+    const dmg = f.elements['ad.equipmentDamage'];
+    if(dmg) dmg.onchange = () => $('#dmgeq').classList.toggle('hidden', dmg.value !== 'SIM' && !trim(f.elements['ad.damagedEquipment'].value));
+    const refreshRoot = () => {
+      const rs = $('#ishroot'), cur = rs.value;
+      const opts = ISH.flatMap(([k,l]) => [...f.querySelectorAll(`input[name="ish.${k}"]:checked`)].map(i => `${l}: ${i.value}`));
+      rs.innerHTML = '<option value="">—</option>' + opts.map(v => `<option value="${esc(v)}" ${v===cur?'selected':''}>${esc(v)}</option>`).join('');
+      if(cur && !opts.includes(cur)) rs.value = '';
+    };
+    $('#ishbox').addEventListener('change', ev => { if(ev.target.id !== 'ishroot') refreshRoot(); });
+    $('#ishbox').addEventListener('click', ev => { if(ev.target.closest('[data-addtag]')) setTimeout(refreshRoot, 0); });
     f.unitId.onchange = () => { f.workSectorId.innerHTML = '<option value="">—</option>'+(S.workSectors||[]).filter(w=>w.unitId===f.unitId.value).map(w=>`<option value="${w.id}">${esc(w.name)}</option>`).join(''); };
     f.personInvolved.onchange = () => {
       const c = (S.collaborators||[]).find(x => trim(x.name).toLowerCase()===trim(f.personInvolved.value).toLowerCase());
@@ -3324,7 +3566,9 @@ const occDay = o => String(o.eventDate||'').slice(0,10);
 /* acidente: com afastamento (dias perdidos/afastamento ou incapacitante/fatal) · sem afastamento (teve atendimento médico) · primeiros socorros */
 function accClass(o){
   if(o.eventType !== 'ACIDENTE') return null;
-  const a = o.accidentDetails || {}, cls = [].concat(a.classification||[]).join(' ');
+  const a = o.accidentDetails || {}, cls = [].concat(a.classification||[]).join(' '), code = [].concat(a.classCode||[]).join(' ');
+  if(/\bACA\b/.test(code)) return 'com';
+  if(/\bASA\b/.test(code)) return 'sem';
   if((Number(a.absenceDays)||0) > 0 || (Number(a.lostDays)||0) > 0 || /Incapacitante(?! *não)|Fatal/i.test(cls.replace('Não incapacitante','')) || /3 a 15|Mais de 15|Permanente/.test(a.incapacity||'')) return 'com';
   if(o.medicalCare === 'SIM' || a.medicalPlaceType) return 'sem';
   return 'ps';
@@ -3434,13 +3678,13 @@ function dashSections(dd){
   const S2 = [], st = dd.wsName ? ' · setor '+dd.wsName : '';
   S2.push({id:'kpi', t:'O período em números', sub:`${dd.periodName}: ${dd.rangeLabel}${st}`, body:`<div class="kpis">
     <div class="kpi big"><b>${dd.dias===null ? '—' : nf(dd.dias)}</b><span>Dias sem acidente</span><small>${dd.dias===null ? 'nenhum acidente registrado' : 'desde o último acidente'}</small></div>
-    <div class="kpi"><b>${nf(dd.acc)}</b><span>Acidentes</span><small>${dd.pl.com} com afastamento${dd.cost.total ? ' · custo '+fmtRk(dd.cost.total) : dd.lostDays ? ' · '+nf(dd.lostDays)+' dias perdidos' : ''}</small></div>
+    <div class="kpi"><b>${nf(dd.acc)}</b><span>Acidentes</span><small>${dd.pl.com} com afastamento${dd.cost.total ? ' · custo '+fmtRk(dd.cost.total) : dd.lostDays ? ' · '+nf(dd.lostDays)+' dias de afastamento' : ''}</small></div>
     <div class="kpi"><b>${nf(dd.pl.quase)}</b><span>Incidentes e quase acidentes</span><small>no período</small></div>
     <div class="kpi"><b>${nf(dd.rkN)}</b><span>Riscos registrados</span><small>${nf(dd.rkOpen)} em aberto · ${nf(dd.rkHot)} altos/críticos</small></div>
     <div class="kpi"><b>${dd.exN ? pct(dd.exOk, dd.exN)+'%' : '—'}</b><span>Extintores em dia</span><small>${nf(dd.exInsp)} de ${nf(dd.exN)} inspecionados no mês</small></div></div>`});
   S2.push({id:'cruz', span:true, t:'Cruz da Segurança', sub:`${ymLabel(dd.ym)}${st} · cada quadrado é um dia do mês`, body:`<div class="czsplit">${cruzHTML(dd.ym, dd.ws, {nav:true})}${placarHTML(placar(dd.ym+'-01', dd.ym+'-31', dd.ws))}</div>`});
   S2.push({id:'placar', t:'Placar de acidentes', sub:`${dd.periodName}: ${dd.rangeLabel}${st}`, body:placarHTML(dd.pl, false)});
-  S2.push({id:'custo', span:true, t:'Custo dos acidentes', sub:`${dd.periodName}: ${dd.rangeLabel}${st} · custos diretos + dias perdidos`, body:costSection(dd)});
+  S2.push({id:'custo', span:true, t:'Custo dos acidentes', sub:`${dd.periodName}: ${dd.rangeLabel}${st} · custo direto × (1 + ${nfx(costFactor())})`, body:costSection(dd)});
   S2.push({id:'custofunc', span:true, t:'Custo dos acidentes por funcionário', sub:`Funcionários acidentados no período${st}`, body:costPeopleSection(dd)});
   S2.push({id:'mes', t:'Acidentes e incidentes por mês', sub:'Últimos 12 meses'+st, body:cols2(dd)});
   S2.push({id:'setor', t:'Ocorrências por setor', sub:'Acidentes e incidentes no período', body:hbars(dd.bySec, 'blue')});
@@ -3543,20 +3787,35 @@ function closePres(fromPop){
    ===================================================================== */
 const fmtR = v => Number(v||0).toLocaleString('pt-BR', {style:'currency', currency:'BRL'});
 const fmtRk = v => { v = Number(v)||0; if(v >= 10000) return 'R$ '+(v/1000).toLocaleString('pt-BR',{maximumFractionDigits:1})+' mil'; return v >= 100 ? v.toLocaleString('pt-BR',{style:'currency', currency:'BRL', maximumFractionDigits:0}) : fmtR(v); };
-const COST_FIELDS = [['medical','Atendimento médico / hospitalar'],['meds','Medicamentos e exames'],['transport','Transporte / remoção'],['material','Danos materiais e equipamentos'],['production','Perda de produção / retrabalho'],['other','Outros custos']];
+const COST_FIELDS = [['medical','Atendimento médico / hospitalar'],['meds','Medicamentos e exames'],['transport','Transporte / remoção'],['material','Danos materiais e equipamentos'],['healthPlan','Plano de saúde no afastamento'],['legal','Multas e indenizações'],['other','Outros custos diretos']];
+const COST_LEGACY = [['production','Perda de produção (registro anterior)']];
+const COMPANY_DAYS = 15;
+const costFactor = () => { const f = costCfg().factor; return (f === '' || f == null || !isFinite(Number(f))) ? 4 : Number(f); };
+const nfx = v => Number(v).toLocaleString('pt-BR', {maximumFractionDigits:2});
 const costCfg = () => S.costSettings || {};
 const lostDaysOf = o => Math.max(Number(o.accidentDetails?.absenceDays)||0, Number(o.accidentDetails?.lostDays)||0);
 const dayCostOf = o => Number(o.costs?.dayCost) > 0 ? Number(o.costs.dayCost) : (Number(costCfg().dayCost)||0);
+/* Custo total = custo direto × (1 + fator de custo indireto). Salário: só os 15 primeiros dias (depois o INSS paga). */
 function occCost(o){
-  const c = o.costs || {}, direct = COST_FIELDS.reduce((s,[k]) => s + (Number(c[k])||0), 0), days = lostDaysOf(o), daysCost = days * dayCostOf(o);
-  return {direct, days, daysCost, total: direct + daysCost};
+  const c = o.costs || {}, items = [...COST_FIELDS, ...COST_LEGACY].reduce((s,[k]) => s + (Number(c[k])||0), 0);
+  const days = lostDaysOf(o), paidDays = Math.min(days, COMPANY_DAYS), daysCost = paidDays * dayCostOf(o);
+  const direct = items + daysCost, factor = costFactor(), indirect = direct * factor;
+  return {items, days, paidDays, daysCost, direct, factor, indirect, total: direct + indirect};
+}
+function costLines(o){
+  const k = occCost(o), c = o.costs || {}, out = [];
+  [...COST_FIELDS, ...COST_LEGACY].forEach(([f,l]) => { if(Number(c[f])) out.push([l, fmtR(c[f])]); });
+  if(k.days) out.push([`Salário dos dias de afastamento`, `${k.paidDays} dia${k.paidDays>1?'s':''} × ${fmtR(dayCostOf(o))} = ${fmtR(k.daysCost)}${k.days > COMPANY_DAYS ? ` (de ${k.days} dias; a partir do 16º o INSS paga)` : ''}`]);
+  out.push(['Custo direto', fmtR(k.direct)]);
+  out.push([`Custo indireto (fator ${nfx(k.factor)})`, `${fmtR(k.direct)} × ${nfx(k.factor)} = ${fmtR(k.indirect)}`]);
+  return out;
 }
 const headcount = () => Number(costCfg().headcount) || Number(String(S.company?.employees||'').replace(/\D/g,'')) || (S.collaborators||[]).filter(c => c.active!==false).length || 0;
 
 VIEWS.costSet = () => {
   const c = costCfg();
   return { title:'Custos dos acidentes', html:`
-  <div class="panel stack"><p style="margin:0">Estes valores servem para calcular o custo dos <b>dias perdidos</b> nos acidentes e o <b>custo por funcionário</b> no dashboard. Os custos diretos (médico, transporte, danos…) são lançados em cada ocorrência.</p></div>
+  <div class="panel stack"><p style="margin:0"><b>Custo total = custo direto × (1 + fator de custo indireto)</b>. O custo direto é o que você lança em cada acidente, na lista no fim desta tela (médico, transporte, danos, multas…), mais o salário dos dias de afastamento até o ${COMPANY_DAYS}º dia. O fator estima os custos que não aparecem na nota: produção parada, horas extras, investigação, imagem. Ex.: R$ 10.000 diretos × (1 + 4) = R$ 50.000.</p></div>
   <form id="f" class="panel" style="margin-top:12px" autocomplete="off">
     <h3 style="margin:0 0 8px;font-size:16px">Calcular o custo de um dia de trabalho</h3>
     <div class="grid2">${fld('Salário médio mensal (R$)', inp('sal', c.salary||'', 'number', 'min="0" step="0.01" inputmode="decimal"'))}${fld('Encargos sobre a folha (%)', inp('enc', c.charges ?? 80, 'number', 'min="0" step="1" inputmode="numeric"'))}</div>
@@ -3564,43 +3823,72 @@ VIEWS.costSet = () => {
     <p class="small muted" id="calc" style="margin:-4px 0 12px"></p>
     ${fld('Número de funcionários da empresa', inp('hc', c.headcount||headcount()||'', 'number', 'min="1" step="1" inputmode="numeric"'))}
     <p class="small muted" style="margin:-4px 0 12px">Usado para o custo por funcionário (custo total ÷ funcionários).</p>
+    ${fld('Fator de custo indireto', inp('fat', costFactor(), 'number', 'min="0" step="0.5" inputmode="decimal"'))}
+    <p class="small muted" style="margin:-4px 0 12px">Padrão 4 (estimativa conservadora). Setores de maior risco costumam usar 6 a 7.</p>
     <button class="btn primary full" type="submit">Salvar</button>
-  </form>`, after(){
+  </form>
+  <h2>Lançar custos por acidente</h2>
+  ${costAccList()}`, after(){
+    document.querySelectorAll('[data-costocc]').forEach(b => b.onclick = () => go('costOcc', {id:b.dataset.costocc}));
     const f = $('#f');
     const calc = () => { const s = parseFloat(f.sal.value)||0, e = parseFloat(f.enc.value)||0, d = parseInt(f.dias.value,10)||22; if(s){ const v = Math.round(s*(1+e/100)/d*100)/100; f.day.value = v; $('#calc').textContent = `${fmtR(s)} + ${e}% de encargos ÷ ${d} dias = ${fmtR(v)} por dia.`; } };
     f.sal.oninput = calc; f.enc.oninput = calc; f.dias.oninput = calc; calc();
     f.onsubmit = ev => { ev.preventDefault();
-      setMeta('costSettings', {salary:parseFloat(f.sal.value)||'', charges:parseFloat(f.enc.value)||0, workDays:parseInt(f.dias.value,10)||22, dayCost:parseFloat(f.day.value)||0, headcount:parseInt(f.hc.value,10)||''});
+      setMeta('costSettings', {salary:parseFloat(f.sal.value)||'', charges:parseFloat(f.enc.value)||0, workDays:parseInt(f.dias.value,10)||22, dayCost:parseFloat(f.day.value)||0, headcount:parseInt(f.hc.value,10)||'', factor: f.fat.value === '' ? 4 : (parseFloat(f.fat.value)||0)});
       logHist('Cadastro', 'Parâmetros de custo dos acidentes'); toast('Salvo'); goBack(); };
   }};
 };
 
-/* bloco do formulário da ocorrência */
+function costAccList(){
+  const acc = (S.occurrences||[]).filter(o => o.eventType==='ACIDENTE').sort((a,b) => String(b.eventDate||'').localeCompare(String(a.eventDate||'')));
+  if(!acc.length) return '<div class="empty">Nenhum acidente registrado.</div>';
+  return `<p class="small muted" style="margin:-4px 0 8px">Os custos ficam só aqui e no dashboard. Eles não aparecem no registro nem no PDF da ocorrência.</p>
+  <div class="stack">${acc.map(o => { const k = occCost(o); return `<button class="panel row" style="width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit" data-costocc="${esc(o.id)}">
+    <span class="grow"><b>${esc(occNum(o) ? 'Nº '+occNum(o) : 'Acidente')} · ${esc(o.personInvolved||'Não informado')}</b><br><span class="small muted">${fmtDate(o.eventDate)} · ${esc(nameOf('workSectors',o.workSectorId)||'Sem setor')}</span></span>
+    <b style="color:${k.total ? 'var(--red)' : 'var(--muted)'}">${k.total ? fmtR(k.total) : 'Lançar'}</b></button>`; }).join('')}</div>`;
+}
+VIEWS.costOcc = (r) => {
+  const o = byId('occurrences', r.id);
+  if(!o) return {title:'Custos', html:'<div class="empty">Acidente não encontrado.</div>'};
+  return { title: occNum(o) ? 'Custos · Nº '+occNum(o) : 'Custos do acidente', html:`
+  <div class="panel stack"><div><b>${esc(o.personInvolved||'Pessoa não informada')}</b></div><div class="small muted">${fmtDate(o.eventDate)} · ${esc(o.exactLocation||'')} · ${lostDaysOf(o) ? lostDaysOf(o)+' dias de afastamento' : 'sem dias de afastamento informados'}</div></div>
+  <form id="f" autocomplete="off" style="margin-top:12px">${occCostFieldset(o)}
+    <div id="prev">${occCostPanel(o)}</div>
+    <button class="btn primary full" type="submit" style="margin-top:12px">Salvar custos</button></form>`, after(){
+    const f = $('#f');
+    const read = () => Object.fromEntries([...COST_FIELDS.map(([k]) => k), 'dayCost'].map(k => [k, parseFloat(f.elements['cost.'+k].value)||'']));
+    const keep = () => { const legacy = Object.fromEntries(COST_LEGACY.map(([k]) => [k, o.costs?.[k]||''])); return {...legacy, ...read()}; };
+    f.oninput = () => { $('#prev').innerHTML = occCostPanel({...o, costs:keep()}); };
+    f.onsubmit = ev => { ev.preventDefault(); o.costs = keep(); upsert('occurrences', o); logHist('Ocorrência editada', `Nº ${occNum(o)} · custos`); toast('Custos salvos'); goBack(); };
+  }};
+};
+
+/* bloco do formulário de custos */
 function occCostFieldset(o){
   const c = o.costs || {}, dc = dayCostOf(o);
   return `<fieldset><legend>Custos (opcional)</legend>
-    <p class="small muted" style="margin:0 0 10px">Lance o que já souber. Os dias de afastamento × custo do dia entram sozinhos${dc ? ` (${fmtR(dc)} por dia)` : ''}.</p>
+    <p class="small muted" style="margin:0 0 10px">Lance os custos diretos que já souber. O salário dos dias de afastamento (até ${COMPANY_DAYS} dias, que a empresa paga) entra sozinho${dc ? ` (${fmtR(dc)} por dia)` : ''}. Os custos indiretos são calculados pelo fator ${nfx(costFactor())}: <b>custo total = direto × ${nfx(1+costFactor())}</b>.</p>
     <div class="grid2">${COST_FIELDS.map(([k,l]) => fld(l+' (R$)', inp('cost.'+k, c[k]||'', 'number', 'min="0" step="0.01" inputmode="decimal"'))).join('')}</div>
     ${fld('Custo do dia deste funcionário (R$), se for diferente do padrão', inp('cost.dayCost', c.dayCost||'', 'number', `min="0" step="0.01" inputmode="decimal" placeholder="${dc ? 'padrão '+fmtR(Number(costCfg().dayCost)||0) : 'defina em Mais › Custos dos acidentes'}"`))}
   </fieldset>`;
 }
 function occCostPanel(o){
   const k = occCost(o); if(!k.total && !k.days) return '';
-  return `<h2>Custos</h2><div class="panel"><dl class="dl">${COST_FIELDS.filter(([f]) => Number(o.costs?.[f])).map(([f,l]) => `<dt>${esc(l)}</dt><dd>${fmtR(o.costs[f])}</dd>`).join('')}
-    ${k.days ? `<dt>Dias perdidos</dt><dd>${k.days} × ${fmtR(dayCostOf(o))} = ${fmtR(k.daysCost)}</dd>` : ''}<dt><b>Custo total</b></dt><dd><b>${fmtR(k.total)}</b></dd></dl></div>`;
+  return `<h2>Custos</h2><div class="panel"><dl class="dl">${costLines(o).map(([l,v]) => `<dt>${esc(l)}</dt><dd>${esc(v)}</dd>`).join('')}
+    <dt><b>Custo total</b></dt><dd><b>${fmtR(k.total)}</b></dd></dl><p class="small muted" style="margin:8px 0 0">Custo total = custo direto × (1 + ${nfx(k.factor)})</p></div>`;
 }
 
 /* dados e seção do dashboard */
 function costData(from, to, ws, months){
   const acc = (S.occurrences||[]).filter(o => o.eventType==='ACIDENTE' && (!ws || o.workSectorId===ws));
   const inPer = acc.filter(o => occDay(o) >= from && occDay(o) <= to);
-  let total = 0, direct = 0, daysCost = 0, days = 0; const people = {}, bySec = {};
-  inPer.forEach(o => { const k = occCost(o); total += k.total; direct += k.direct; daysCost += k.daysCost; days += k.days;
+  let total = 0, direct = 0, daysCost = 0, days = 0, indirect = 0; const people = {}, bySec = {};
+  inPer.forEach(o => { const k = occCost(o); total += k.total; direct += k.direct; daysCost += k.daysCost; days += k.days; indirect += k.indirect;
     const n = trim(o.personInvolved) || 'Não informado', p = people[n] = people[n] || {name:n, sector:nameOf('workSectors', o.workSectorId), n:0, days:0, cost:0};
     p.n++; p.days += k.days; p.cost += k.total; const sn = nameOf('workSectors', o.workSectorId) || 'Sem setor'; bySec[sn] = (bySec[sn]||0) + k.total; });
   const mc = months.map(m => ({...m, cost:0})); acc.forEach(o => { const m = mc.find(x => x.key === occDay(o).slice(0,7)); if(m) m.cost += occCost(o).total; });
   const hc = headcount(), noCost = inPer.filter(o => !occCost(o).total).length;
-  return {total, direct, daysCost, days, n:inPer.length, hc, perEmp: hc ? total/hc : 0, perAcc: inPer.length ? total/inPer.length : 0, people:Object.values(people).sort((a,b) => b.cost - a.cost || b.days - a.days), bySec:toList(bySec), months:mc, noCost, dayCost:Number(costCfg().dayCost)||0};
+  return {total, direct, indirect, factor:costFactor(), daysCost, days, n:inPer.length, hc, perEmp: hc ? total/hc : 0, perAcc: inPer.length ? total/inPer.length : 0, people:Object.values(people).sort((a,b) => b.cost - a.cost || b.days - a.days), bySec:toList(bySec), months:mc, noCost, dayCost:Number(costCfg().dayCost)||0};
 }
 function costCols(c, from, t){
   const m = Math.max(...c.months.map(x => x.cost), 1), now = t.slice(0,7), f = from.slice(0,7);
@@ -3608,17 +3896,17 @@ function costCols(c, from, t){
 }
 function costSection(dd){
   const c = dd.cost;
-  const note = !c.dayCost ? '<p class="dnote">Defina o custo de um dia de trabalho em Mais › Custos dos acidentes para os dias perdidos entrarem na conta.</p>' : '';
-  const miss = c.noCost ? `<p class="dnote">${c.noCost} acidente${c.noCost>1?'s':''} do período ainda sem custo lançado.</p>` : '';
+  const note = !c.dayCost ? '<p class="dnote">Defina o custo de um dia de trabalho em Mais › Custos dos acidentes para o salário dos dias de afastamento entrar na conta.</p>' : '';
+  const miss = c.noCost ? `<p class="dnote">${c.noCost} acidente${c.noCost>1?'s':''} do período ainda sem custo lançado (lance em Mais › Custos dos acidentes).</p>` : '';
   return `
     <div class="statrow">${stat(fmtRk(c.total), 'custo dos acidentes no período', c.total ? 'red' : 'ok')}${stat(c.n ? fmtRk(c.perAcc) : '—', 'custo médio por acidente')}${stat(c.hc ? fmtR(c.perEmp) : '—', c.hc ? `por funcionário (${nf(c.hc)} funcionários)` : 'por funcionário: informe o total de funcionários')}</div>
-    <div class="statrow">${stat(nf(c.days), 'dias perdidos', c.days ? 'amber' : 'ok')}${stat(fmtRk(c.daysCost), 'custo dos dias perdidos')}${stat(fmtRk(c.direct), 'custos diretos (médico, danos…)')}</div>
+    <div class="statrow">${stat(nf(c.days), 'dias de afastamento', c.days ? 'amber' : 'ok')}${stat(fmtRk(c.direct), 'custos diretos (médico, danos, salário até 15 dias)')}${stat(fmtRk(c.indirect), `custos indiretos estimados (fator ${nfx(c.factor)})`)}</div>
     <div class="costwrap"><p class="small muted" style="margin:0 0 6px">Custo por mês (últimos 12 meses)</p>${costCols(c, dd.from, dd.t)}</div>
     ${note}${miss}`;
 }
 function costPeopleSection(dd){
   const c = dd.cost;
-  return `${c.people.length ? `<div class="tscroll"><table class="t"><tr><th>Funcionário</th><th>Setor</th><th style="text-align:right">Acidentes</th><th style="text-align:right">Dias perdidos</th><th style="text-align:right">Custo</th></tr>${c.people.slice(0,8).map(p => `<tr><td><b>${esc(p.name)}</b></td><td>${esc(p.sector||'—')}</td><td style="text-align:right">${p.n}</td><td style="text-align:right">${p.days||'—'}</td><td style="text-align:right;font-weight:700">${p.cost ? fmtR(p.cost) : '—'}</td></tr>`).join('')}</table></div>` : '<p class="muted small" style="margin:0">Nenhum acidente no período.</p>'}
+  return `${c.people.length ? `<div class="tscroll"><table class="t"><tr><th>Funcionário</th><th>Setor</th><th style="text-align:right">Acidentes</th><th style="text-align:right">Dias de afast.</th><th style="text-align:right">Custo</th></tr>${c.people.slice(0,8).map(p => `<tr><td><b>${esc(p.name)}</b></td><td>${esc(p.sector||'—')}</td><td style="text-align:right">${p.n}</td><td style="text-align:right">${p.days||'—'}</td><td style="text-align:right;font-weight:700">${p.cost ? fmtR(p.cost) : '—'}</td></tr>`).join('')}</table></div>` : '<p class="muted small" style="margin:0">Nenhum acidente no período.</p>'}
     ${c.bySec.some(x => x.v) ? `<p class="small muted" style="margin:16px 0 8px">Custo por setor</p>${hbars(c.bySec, 'red', 5, fmtRk)}` : ''}`;
 }
 
